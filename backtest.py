@@ -12,14 +12,14 @@ import datetime
 
 
 # Download data for 3 years
-symbol = 'SPY'
+symbol = 'TSLA'
 levels_start_date = '2020-03-17'
 levels_end_date = '2023-03-17'
 levels_data = yf.download(symbol, start=levels_start_date, end=levels_end_date)
 
 #Download data for a different time interval
-signals_start_date = '2023-04-20'
-signals_end_date = '2023-04-21'
+signals_start_date = '2023-05-01'
+signals_end_date = '2023-05-22'
 signals_data = yf.download(symbol, start=signals_start_date, end=signals_end_date, interval = '5m')
 
 # Instantiate the FibonacciStrategy with separate datasets for levels and signals
@@ -73,7 +73,7 @@ def calculate_total_return(portfolio):
     return total_return_dollars, total_return_percentage
 
 
-plot_signals(signals_data, backtester.signals)
+#plot_signals(signals_data, backtester.signals)
 portfolio = backtester.simulate_trades(initial_capital = 1000)
 
 total_return_dollars, total_return_percentage = calculate_total_return(portfolio)
