@@ -3,6 +3,8 @@ import pandas as pd
 from typing import List
 from datetime import timedelta
 import datetime
+import pandas_ta as ta
+
 
 class BaseStrategy:
     def __init__(self, data):
@@ -73,6 +75,10 @@ class FibonacciEMAStrategy(FibonacciStrategy):
         self.start_time = start_time
         self.end_time = end_time
 
+    def calculate_adx(self, window=10):
+        adx_df = ta.adx(self.data['High'], self.data['Low'], self.data['Close'], length=window)
+        self.data['ADX'] = adx_df['ADX_10']
+
     def generate_signals(self):
         signals = pd.DataFrame(index=self.data.index)
         signals['positions'] = 0
@@ -82,30 +88,34 @@ class FibonacciEMAStrategy(FibonacciStrategy):
         self.data['short_ema'] = self.data['Close'].ewm(span=self.short_window, adjust=True).mean()
         self.data['long_ema'] = self.data['Close'].ewm(span=self.long_window, adjust=True).mean()
 
+        #ADX
+        self.calculate_adx(window=10)
+
         for i in range(len(self.data)):
             for current_time, row in self.data.iterrows():
                 # Check if the current time is within the allowed trading hours
                 if self.start_time <= current_time.time() <= self.end_time:
                     if not signals.loc[current_time, 'positions_open']:
-                        buy_signal = ((self.data.loc[current_time, 'short_ema'] >= self.data.loc[current_time, 'long_ema']) &
-                                      (self.data['short_ema'].shift(1).loc[current_time] < self.data['long_ema'].shift(1).loc[current_time])) & \
-                                     any(abs(self.data.loc[current_time, 'Close'] - level) < (max(self.fib_levels) - min(self.fib_levels)) * 0.1 for level in self.fib_levels)
+                       buy_signal = ((self.data.loc[current_time, 'short_ema'] >= self.data.loc[current_time, 'long_ema']) &
+                              (self.data['short_ema'].shift(1).loc[current_time] < self.data['long_ema'].shift(1).loc[current_time]) &
+                              (self.data.loc[current_time, 'ADX'] > 25) &
+                              any(abs(self.data.loc[current_time, 'Close'] - level) < (max(self.fib_levels) - min(self.fib_levels)) * 0.1 for level in self.fib_levels))
 
                         sell_signal = ((self.data.loc[current_time, 'short_ema'] <= self.data.loc[current_time, 'long_ema']) &
-                                       (self.data['short_ema'].shift(1).loc[current_time] > self.data['long_ema'].shift(1).loc[current_time])) & \
-                                      any(abs(self.data.loc[current_time, 'Close'] - level) < (max(self.fib_levels) - min(self.fib_levels)) * 0.1 for level in self.fib_levels)
-
+                               (self.data['short_ema'].shift(1).loc[current_time] > self.data['long_ema'].shift(1).loc[current_time]) &
+                               (self.data.loc[current_time, 'ADX'] > 25) &
+                               any(abs(self.data.loc[current_time, 'Close'] - level) < (max(self.fib_levels) - min(self.fib_levels)) * 0.1 for level in self.fib_levels))
                         if buy_signal:
                             signals.loc[current_time, 'positions'] = 1
                             signals.loc[current_time, 'positions_open'] = True
-                            close_time = current_time + pd.Timedelta(minutes=10)
+                            close_time = current_time + self.time_to_close_position
                             if close_time in signals.index:
                                 signals.loc[close_time, 'positions'] = -1
 
                         elif sell_signal:
                             signals.loc[current_time, 'positions'] = -1
                             signals.loc[current_time, 'positions_open'] = True
-                            close_time = current_time + pd.Timedelta(minutes=10)
+                            close_time = current_time + self.time_to_close_position
                             if close_time in signals.index:
                                 signals.loc[close_time, 'positions'] = 1
 
