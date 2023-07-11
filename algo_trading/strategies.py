@@ -74,6 +74,9 @@ class FibonacciEMAStrategy(FibonacciStrategy):
         self.time_to_close_position = time_to_close_position
         self.start_time = start_time
         self.end_time = end_time
+        # assuming that stop_loss and take_profit are given in terms of percentage (e.g. 0.01 for 1%)
+        self.stop_loss = 0.003
+        self.take_profit = 0.009
 
     def calculate_adx(self, window=10):
         adx_df = ta.adx(self.data['High'], self.data['Low'], self.data['Close'], length=window)
@@ -83,6 +86,10 @@ class FibonacciEMAStrategy(FibonacciStrategy):
         signals = pd.DataFrame(index=self.data.index)
         signals['positions'] = 0
         signals['positions_open'] = False
+        signals['buy_price'] = 0.0
+        signals['stop_loss'] = 0.0
+        signals['take_profit'] = 0.0
+        signals['sell_price'] = 0.0
 
         # Calculate the short and long EMAs
         self.data['short_ema'] = self.data['Close'].ewm(span=self.short_window, adjust=True).mean()
@@ -90,38 +97,71 @@ class FibonacciEMAStrategy(FibonacciStrategy):
 
         #ADX
         self.calculate_adx(window=10)
-
+        previous_day = None        
         for i in range(len(self.data)):
             for current_time, row in self.data.iterrows():
                 # Check if the current time is within the allowed trading hours
-                if self.start_time <= current_time.time() <= self.end_time:
-                    if not signals.loc[current_time, 'positions_open']:
+                if self.start_time <= current_time.time() < self.end_time:
+                    current_day = current_time.date()
+                    if previous_day != current_day:
+                        # This is the first timestamp of the new day
+                        signals.loc[current_time, 'positions_open'] = False
+                        previous_day = current_day
+                    if not signals['positions_open'].shift(1).loc[current_time]:                    
                        buy_signal = ((self.data.loc[current_time, 'short_ema'] >= self.data.loc[current_time, 'long_ema']) &
                               (self.data['short_ema'].shift(1).loc[current_time] < self.data['long_ema'].shift(1).loc[current_time]) &
                               (self.data.loc[current_time, 'ADX'] > 25) &
                               any(abs(self.data.loc[current_time, 'Close'] - level) < (max(self.fib_levels) - min(self.fib_levels)) * 0.1 for level in self.fib_levels))
 
-                        sell_signal = ((self.data.loc[current_time, 'short_ema'] <= self.data.loc[current_time, 'long_ema']) &
+                       sell_signal = ((self.data.loc[current_time, 'short_ema'] <= self.data.loc[current_time, 'long_ema']) &
                                (self.data['short_ema'].shift(1).loc[current_time] > self.data['long_ema'].shift(1).loc[current_time]) &
                                (self.data.loc[current_time, 'ADX'] > 25) &
                                any(abs(self.data.loc[current_time, 'Close'] - level) < (max(self.fib_levels) - min(self.fib_levels)) * 0.1 for level in self.fib_levels))
-                        if buy_signal:
+                       if buy_signal:
+                            buy_price = self.data.loc[current_time, 'Close']
+                            signals.loc[current_time, 'positions_open'] = True
                             signals.loc[current_time, 'positions'] = 1
+                            signals.loc[current_time, 'buy_price'] = buy_price
+                            signals.loc[current_time, 'stop_loss'] = buy_price * (1 - self.stop_loss)
+                            signals.loc[current_time, 'take_profit'] = buy_price * (1 + self.take_profit)
+                       elif sell_signal:
                             signals.loc[current_time, 'positions_open'] = True
-                            close_time = current_time + self.time_to_close_position
-                            if close_time in signals.index:
-                                signals.loc[close_time, 'positions'] = -1
-
-                        elif sell_signal:
+                            sell_price = self.data.loc[current_time, 'Close']
                             signals.loc[current_time, 'positions'] = -1
-                            signals.loc[current_time, 'positions_open'] = True
-                            close_time = current_time + self.time_to_close_position
-                            if close_time in signals.index:
-                                signals.loc[close_time, 'positions'] = 1
-
+                            signals.loc[current_time, 'sell_price'] = sell_price
+                            signals.loc[current_time, 'stop_loss'] = sell_price * (1 + self.stop_loss)
+                            signals.loc[current_time, 'take_profit'] = sell_price * (1 - self.take_profit)
+                           #TO DO: REMOVE THIS PARAMETER
+                            #close_time = current_time + self.time_to_close_position
+                            #if close_time in signals.index:
+                            #    signals.loc[close_time, 'positions'] = 1
+                            #    signals.loc[current_time, 'positions_open'] = True
                     else:
-                        if signals.loc[current_time, 'positions'] != 0:
+                        current_price = self.data.loc[current_time, 'Close']
+                        stop_loss_level = signals['stop_loss'].shift(1).loc[current_time]
+                        take_profit_level = signals['take_profit'].shift(1).loc[current_time]
+                        if signals['positions'].shift(1).loc[current_time] == 1 and (current_price <= stop_loss_level or current_price >= take_profit_level) or\
+                        signals['positions'].shift(1).loc[current_time] == -1 and (current_price >= stop_loss_level or current_price <= take_profit_level):
+                            signals.loc[current_time, 'positions'] = 0
                             signals.loc[current_time, 'positions_open'] = False
-
+                            signals.loc[current_time, 'sell_price'] = 0.0
+                            signals.loc[current_time, 'stop_loss'] = 0.0
+                            signals.loc[current_time, 'take_profit'] = 0.0
+                        else:
+                            signals.loc[current_time, 'positions_open'] = signals['positions_open'].shift(1).loc[current_time]
+                            signals.loc[current_time, 'positions'] = signals['positions'].shift(1).loc[current_time]
+                            signals.loc[current_time, 'stop_loss'] = signals['stop_loss'].shift(1).loc[current_time]
+                            signals.loc[current_time, 'take_profit'] = signals['take_profit'].shift(1).loc[current_time]
+                else:
+                    # Check if it's the end of the trading day
+                    if current_time.time() == self.end_time:
+                        # Close all positions
+                        signals.loc[current_time, 'positions'] = 0
+                        signals.loc[current_time, 'positions_open'] = False
+                        signals.loc[current_time, 'sell_price'] = 0.0
+                        signals.loc[current_time, 'stop_loss'] = 0.0
+                        signals.loc[current_time, 'take_profit'] = 0.0
+                signals['trade_day'] = (signals['positions'].diff() != 0) | signals['buy_price'].notna() | signals['sell_price'].notna()
+                signals = signals.fillna(method='ffill').fillna(0)
             return signals
            

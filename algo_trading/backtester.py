@@ -1,18 +1,47 @@
 import pandas as pd
 
 class Backtester:
-    def __init__(self, data, strategy):
-        self.data = data
+    def __init__(self, strategy):
         self.strategy = strategy
-        self.signals = self.strategy.generate_signals()
-        signal_rows = self.signals[self.signals['positions'] != 0]
-    
-    def simulate_trades(self, initial_capital=100000.0):
-        portfolio = pd.DataFrame(index=self.signals.index)
-        portfolio['holdings'] = self.signals['positions'].cumsum() * self.data['Close']
-        portfolio['cash'] = initial_capital - (self.signals['positions'] * self.data['Close']).cumsum()
-        portfolio['total'] = portfolio['cash'] + portfolio['holdings']
-        portfolio['returns'] = portfolio['total'].pct_change()
-        portfolio['returns'].fillna(0, inplace=True)
-        return portfolio
+        self.data = strategy.data
+        self.signals = strategy.generate_signals()
+
+    def print_signals_for_day(self, date: str):
+        daily_signals = self.signals.loc[date]
+
+        daily_profit = 0.0
+        buying_price = None
+        if daily_signals['trade_day'].any():  # Check if there was a trade on this day
+            first_row = True
+            for time, row in daily_signals.iterrows():
+                prev_positions = daily_signals['positions'].shift().loc[time]
+                prev_positions_open = daily_signals['positions_open'].shift().loc[time]
+                if first_row:
+                    if row['positions'] > 0:
+                        print(f"{time}: Buy signal. Buy price: {row['buy_price']}")
+                        buying_price = row['buy_price']
+                    elif row['positions'] < 0:
+                        print(f"{time}: Sell signal. Sell price: {row['sell_price']}")
+                        buying_price = row['sell_price']
+                    first_row = False
+                elif row['positions'] > 0 and row['positions'] != prev_positions: 
+                    print(f"{time}: Buy signal. Buy price: {row['buy_price']}")
+                    buying_price = row['buy_price']
+                elif row['positions'] < 0 and row['positions'] != prev_positions:
+                    print(f"{time}: Sell signal. Sell price: {row['sell_price']}")
+                    buying_price = row['sell_price']  # in case of short selling
+                elif not first_row and row['positions'] == 0 and not row['positions_open'] and prev_positions_open and prev_positions != 0:
+                    close_price = self.data['Close'].loc[time]
+                    print(f"{time}: Position closed. Close price: {close_price}")
+                    if buying_price is not None:
+                        if prev_positions > 0:  # Long position, profit is closing price - buying price
+                            daily_profit += close_price - buying_price  
+                        else:  # Short position, profit is buying price - closing price
+                            daily_profit += buying_price - close_price
+                        buying_price = None
+                first_row = False
+
+            print(f"Daily profit for {date}: {daily_profit}")
+
+        return daily_profit
 
